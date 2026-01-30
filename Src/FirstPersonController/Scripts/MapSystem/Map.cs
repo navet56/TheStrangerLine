@@ -1,13 +1,13 @@
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.EventSystems;
-using System.Collections.Generic;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
 
 public class Map : MonoBehaviour
 {
+    public enum MapState { Fullscreen, Minimap }
+
     [Header("UI References")]
     public GameObject mapCanvas;
     public RawImage mapImage;
@@ -17,6 +17,7 @@ public class Map : MonoBehaviour
     public GameObject background;
     public GameObject helpText;
     public GameObject colorPalette;
+    public RawImage gridOverlay;
 
     [Header("Map Settings")]
     public int mapResolution = 512;
@@ -43,22 +44,25 @@ public class Map : MonoBehaviour
     public Vector2 worldBoundsMax = new Vector2(250, 250);
 
     [Header("Minimap Settings")]
-    [Tooltip("Taille de la minimap en pourcentage de l'ecran")]
     [Range(0.1f, 0.4f)]
     public float minimapSize = 0.2f;
-    [Tooltip("Marge depuis le bord en pixels")]
     public float minimapMargin = 20f;
+
+    [Header("Grid Overlay")]
+    public bool showGrid = true;
+    public Color gridColor = new Color(0.2f, 0.15f, 0.1f, 0.8f);
+    [Range(1, 10)]
+    public int gridLineWidth = 4;
 
     [Header("Debug")]
     public bool showDebugBounds = true;
 
     private Texture2D mapTexture;
-    private bool isMapOpen;
-    private bool isMinimapMode;
-    private bool isDrawing;
+    private Texture2D gridTexture;
+    private MapState currentState = MapState.Minimap;
+    private bool isHudVisible = true;
     private Vector2 lastDrawPos;
     private bool hasLastPos;
-
     private Color[] currentPixels;
     private bool textureNeedsApply;
 
@@ -70,10 +74,9 @@ public class Map : MonoBehaviour
     private void Start()
     {
         InitializeMap();
+        CreateGridTexture();
         SetupInput();
-
-        if (mapCanvas != null)
-            mapCanvas.SetActive(false);
+        ApplyState();
     }
 
     private void InitializeMap()
@@ -94,30 +97,70 @@ public class Map : MonoBehaviour
         LoadMap();
     }
 
+    private void CreateGridTexture()
+    {
+        gridTexture = new Texture2D(mapResolution, mapResolution, TextureFormat.RGBA32, false);
+        gridTexture.filterMode = FilterMode.Bilinear;
+
+        Color[] gridPixels = new Color[mapResolution * mapResolution];
+
+        for (int i = 0; i < gridPixels.Length; i++)
+            gridPixels[i] = Color.clear;
+
+        int cellSize = mapResolution / 3;
+
+        for (int line = 1; line <= 2; line++)
+        {
+            int lineCenter = line * cellSize;
+
+            for (int offset = -gridLineWidth; offset <= gridLineWidth; offset++)
+            {
+                int hPos = lineCenter + offset;
+                if (hPos < 0 || hPos >= mapResolution) continue;
+
+                for (int i = 0; i < mapResolution; i++)
+                {
+                    gridPixels[i * mapResolution + hPos] = gridColor;
+                    gridPixels[hPos * mapResolution + i] = gridColor;
+                }
+            }
+        }
+
+        gridTexture.SetPixels(gridPixels);
+        gridTexture.Apply();
+
+        if (gridOverlay != null)
+        {
+            gridOverlay.texture = gridTexture;
+            gridOverlay.gameObject.SetActive(showGrid);
+            Debug.Log("Grid texture applied to overlay");
+        }
+        else
+        {
+            Debug.LogWarning("gridOverlay is not assigned! Re-run Create Map UI in MapSetup.");
+        }
+    }
+
     private void SetupInput()
     {
 #if ENABLE_INPUT_SYSTEM
         playerInput = GetComponent<PlayerInput>();
         if (playerInput != null)
-        {
             mapAction = playerInput.actions.FindAction("Map");
-        }
 #endif
     }
 
     private void Update()
     {
-        HandleMapToggleUnscaled();
-        HandleMinimapToggle();
+        HandleInput();
 
-        if (isMapOpen && !isMinimapMode)
+        if (isHudVisible)
         {
-            HandleDrawingUnscaled();
-            HandleBrushControlsUnscaled();
-        }
-
-        if (isMapOpen || isMinimapMode)
-        {
+            if (currentState == MapState.Fullscreen)
+            {
+                HandleDrawing();
+                HandleBrushControls();
+            }
             UpdatePlayerMarker();
         }
 
@@ -129,193 +172,146 @@ public class Map : MonoBehaviour
         }
     }
 
-    private void HandleMapToggleUnscaled()
+    private void HandleInput()
     {
-        bool togglePressed = false;
+        bool toggleMap = false;
+        bool toggleHud = false;
 
 #if ENABLE_INPUT_SYSTEM
         if (mapAction != null)
-            togglePressed = mapAction.WasPressedThisFrame();
-        else
-            togglePressed = Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame;
+            toggleMap = mapAction.WasPressedThisFrame();
+        else if (Keyboard.current != null)
+            toggleMap = Keyboard.current.eKey.wasPressedThisFrame;
+
+        if (Keyboard.current != null)
+            toggleHud = Keyboard.current.hKey.wasPressedThisFrame;
 #else
-        togglePressed = Input.GetKeyDown(KeyCode.E);
+        toggleMap = Input.GetKeyDown(KeyCode.E);
+        toggleHud = Input.GetKeyDown(KeyCode.H);
 #endif
 
-        if (togglePressed)
-            ToggleMap();
+        if (toggleMap)
+            ToggleMapState();
+
+        if (toggleHud)
+            ToggleHud();
     }
 
-    private void HandleMinimapToggle()
+    public void ToggleMapState()
     {
-        bool minimapPressed = false;
+        if (!isHudVisible)
+            return;
 
-#if ENABLE_INPUT_SYSTEM
-        minimapPressed = Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
-#else
-        minimapPressed = Input.GetKeyDown(KeyCode.R);
-#endif
-
-        if (minimapPressed)
-        {
-            ToggleMinimap();
-        }
+        currentState = (currentState == MapState.Fullscreen) ? MapState.Minimap : MapState.Fullscreen;
+        ApplyState();
     }
 
-    public void ToggleMap()
+    public void ToggleHud()
     {
-        if (isMinimapMode)
-        {
-            CloseMinimap();
-        }
+        if (currentState == MapState.Fullscreen)
+            currentState = MapState.Minimap;
 
-        isMapOpen = !isMapOpen;
+        isHudVisible = !isHudVisible;
 
         if (mapCanvas != null)
-            mapCanvas.SetActive(isMapOpen);
+            mapCanvas.SetActive(isHudVisible);
 
-        if (isMapOpen)
+        if (!isHudVisible)
         {
-            SetFullscreenMode();
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-            Time.timeScale = 0f;
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            Time.timeScale = 1f;
+            hasLastPos = false;
+            SaveMap();
         }
         else
         {
-            CloseMap();
+            ApplyState();
         }
     }
 
-    public void ToggleMinimap()
+    private void ApplyState()
     {
-        if (isMapOpen)
-        {
-            CloseMap();
-        }
-
-        isMinimapMode = !isMinimapMode;
-
         if (mapCanvas != null)
-            mapCanvas.SetActive(isMinimapMode);
+            mapCanvas.SetActive(isHudVisible);
 
-        if (isMinimapMode)
-        {
-            SetMinimapMode(true);
-        }
-        else
-        {
-            CloseMinimap();
-        }
-    }
+        if (!isHudVisible)
+            return;
 
-    private void CloseMinimap()
-    {
-        isMinimapMode = false;
-        if (mapCanvas != null)
-            mapCanvas.SetActive(false);
-    }
-
-    private void CloseMap()
-    {
-        isMapOpen = false;
-        isMinimapMode = false;
-
-        if (mapCanvas != null)
-            mapCanvas.SetActive(false);
-
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
-        Time.timeScale = 1f;
-        hasLastPos = false;
-        SaveMap();
-    }
-
-    private void SetMinimapMode(bool minimap)
-    {
-        isMinimapMode = minimap;
+        bool fullscreen = (currentState == MapState.Fullscreen);
 
         if (background != null)
-            background.SetActive(!minimap);
+            background.SetActive(fullscreen);
 
         if (helpText != null)
-            helpText.SetActive(!minimap);
+            helpText.SetActive(fullscreen);
 
         if (colorPalette != null)
-            colorPalette.SetActive(!minimap);
+            colorPalette.SetActive(fullscreen);
 
-        if (minimap)
+        if (gridOverlay != null)
+            gridOverlay.gameObject.SetActive(showGrid);
+
+        if (sizeLimit != null)
         {
-            if (sizeLimit != null)
+            if (fullscreen)
+            {
+                sizeLimit.anchorMin = new Vector2(0.05f, 0.08f);
+                sizeLimit.anchorMax = new Vector2(0.95f, 0.92f);
+                sizeLimit.offsetMin = Vector2.zero;
+                sizeLimit.offsetMax = Vector2.zero;
+            }
+            else
             {
                 sizeLimit.anchorMin = new Vector2(1 - minimapSize, 0);
                 sizeLimit.anchorMax = new Vector2(1, minimapSize);
                 sizeLimit.offsetMin = new Vector2(-minimapMargin, minimapMargin);
                 sizeLimit.offsetMax = new Vector2(-minimapMargin, minimapMargin);
             }
-
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-            Time.timeScale = 1f;
         }
-        else
+
+        if (fullscreen)
         {
-            SetFullscreenMode();
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
             Time.timeScale = 0f;
         }
-    }
-
-    private void SetFullscreenMode()
-    {
-        if (background != null)
-            background.SetActive(true);
-
-        if (helpText != null)
-            helpText.SetActive(true);
-
-        if (colorPalette != null)
-            colorPalette.SetActive(true);
-
-        if (sizeLimit != null)
+        else
         {
-            sizeLimit.anchorMin = new Vector2(0.05f, 0.08f);
-            sizeLimit.anchorMax = new Vector2(0.95f, 0.92f);
-            sizeLimit.offsetMin = Vector2.zero;
-            sizeLimit.offsetMax = Vector2.zero;
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            Time.timeScale = 1f;
+            hasLastPos = false;
+            SaveMap();
         }
     }
 
-    private void HandleDrawingUnscaled()
+    private void HandleDrawing()
     {
         bool drawing = false;
         bool erasing = false;
+        Vector2 mousePos;
 
 #if ENABLE_INPUT_SYSTEM
         if (Mouse.current != null)
         {
             drawing = Mouse.current.leftButton.isPressed;
             erasing = Mouse.current.rightButton.isPressed;
+            mousePos = Mouse.current.position.ReadValue();
         }
+        else return;
 #else
         drawing = Input.GetMouseButton(0);
         erasing = Input.GetMouseButton(1);
+        mousePos = Input.mousePosition;
 #endif
 
         if (drawing || erasing)
         {
-            Vector2 localPoint;
             RectTransform rectTransform = mapImage.rectTransform;
 
-#if ENABLE_INPUT_SYSTEM
-            Vector2 mousePos = Mouse.current.position.ReadValue();
-#else
-            Vector2 mousePos = Input.mousePosition;
-#endif
-
             if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                rectTransform, mousePos, null, out localPoint))
+                rectTransform, mousePos, null, out Vector2 localPoint))
             {
                 Rect rect = rectTransform.rect;
                 float normalizedX = (localPoint.x - rect.x) / rect.width;
@@ -325,7 +321,6 @@ public class Map : MonoBehaviour
                 {
                     int x = Mathf.FloorToInt(normalizedX * mapResolution);
                     int y = Mathf.FloorToInt(normalizedY * mapResolution);
-
                     Color colorToUse = erasing ? backgroundColor : brushColor;
 
                     if (hasLastPos)
@@ -358,13 +353,10 @@ public class Map : MonoBehaviour
                     int py = centerY + y;
 
                     if (px >= 0 && px < mapResolution && py >= 0 && py < mapResolution)
-                    {
                         currentPixels[py * mapResolution + px] = color;
-                    }
                 }
             }
         }
-
         textureNeedsApply = true;
     }
 
@@ -379,24 +371,15 @@ public class Map : MonoBehaviour
         while (true)
         {
             DrawBrush(x0, y0, color);
-
             if (x0 == x1 && y0 == y1) break;
 
             int e2 = 2 * err;
-            if (e2 > -dy)
-            {
-                err -= dy;
-                x0 += sx;
-            }
-            if (e2 < dx)
-            {
-                err += dx;
-                y0 += sy;
-            }
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 < dx) { err += dx; y0 += sy; }
         }
     }
 
-    private void HandleBrushControlsUnscaled()
+    private void HandleBrushControls()
     {
 #if ENABLE_INPUT_SYSTEM
         if (Keyboard.current != null)
@@ -410,12 +393,13 @@ public class Map : MonoBehaviour
                     break;
                 }
             }
+        }
 
-            float scroll = Mouse.current != null ? Mouse.current.scroll.y.ReadValue() : 0;
-            if (scroll > 0)
-                brushSize = Mathf.Min(brushSize + 1, 20);
-            else if (scroll < 0)
-                brushSize = Mathf.Max(brushSize - 1, 1);
+        if (Mouse.current != null)
+        {
+            float scroll = Mouse.current.scroll.y.ReadValue();
+            if (scroll > 0) brushSize = Mathf.Min(brushSize + 1, 20);
+            else if (scroll < 0) brushSize = Mathf.Max(brushSize - 1, 1);
         }
 #else
         for (int i = 0; i < brushColors.Length && i < 9; i++)
@@ -426,12 +410,10 @@ public class Map : MonoBehaviour
                 break;
             }
         }
-        
+
         float scroll = Input.mouseScrollDelta.y;
-        if (scroll > 0)
-            brushSize = Mathf.Min(brushSize + 1, 20);
-        else if (scroll < 0)
-            brushSize = Mathf.Max(brushSize - 1, 1);
+        if (scroll > 0) brushSize = Mathf.Min(brushSize + 1, 20);
+        else if (scroll < 0) brushSize = Mathf.Max(brushSize - 1, 1);
 #endif
     }
 
@@ -440,24 +422,19 @@ public class Map : MonoBehaviour
         if (!showPlayerMarker || playerMarker == null || mapImage == null) return;
 
         Vector3 playerPos = transform.position;
-
         float worldWidth = worldBoundsMax.x - worldBoundsMin.x;
         float worldHeight = worldBoundsMax.y - worldBoundsMin.y;
 
         if (worldWidth <= 0 || worldHeight <= 0) return;
 
-        float normalizedX = (playerPos.x - worldBoundsMin.x) / worldWidth;
-        float normalizedY = (playerPos.z - worldBoundsMin.y) / worldHeight;
-
-        normalizedX = Mathf.Clamp01(normalizedX);
-        normalizedY = Mathf.Clamp01(normalizedY);
+        float normalizedX = Mathf.Clamp01((playerPos.x - worldBoundsMin.x) / worldWidth);
+        float normalizedY = Mathf.Clamp01((playerPos.z - worldBoundsMin.y) / worldHeight);
 
         Rect mapRect = mapImage.rectTransform.rect;
-
-        float posX = (normalizedX - 0.5f) * mapRect.width;
-        float posY = (normalizedY - 0.5f) * mapRect.height;
-
-        playerMarker.anchoredPosition = new Vector2(posX, posY);
+        playerMarker.anchoredPosition = new Vector2(
+            (normalizedX - 0.5f) * mapRect.width,
+            (normalizedY - 0.5f) * mapRect.height
+        );
         playerMarker.localRotation = Quaternion.Euler(0, 0, -transform.eulerAngles.y);
     }
 
@@ -465,16 +442,14 @@ public class Map : MonoBehaviour
     {
         if (!showDebugBounds) return;
 
-        Gizmos.color = Color.cyan;
-
         Vector3 min = new Vector3(worldBoundsMin.x, 0, worldBoundsMin.y);
         Vector3 max = new Vector3(worldBoundsMax.x, 0, worldBoundsMax.y);
         Vector3 size = max - min;
         Vector3 center = min + size * 0.5f;
         center.y = transform.position.y;
 
+        Gizmos.color = Color.cyan;
         Gizmos.DrawWireCube(center, new Vector3(size.x, 1, size.z));
-
         Gizmos.color = Color.red;
         Gizmos.DrawSphere(new Vector3(worldBoundsMin.x, center.y, worldBoundsMin.y), 2f);
         Gizmos.color = Color.green;
@@ -484,10 +459,8 @@ public class Map : MonoBehaviour
     public void AutoConfigureFromTerrain(Terrain terrain)
     {
         if (terrain == null) return;
-
         Vector3 pos = terrain.transform.position;
         Vector3 size = terrain.terrainData.size;
-
         worldBoundsMin = new Vector2(pos.x, pos.z);
         worldBoundsMax = new Vector2(pos.x + size.x, pos.z + size.z);
     }
@@ -502,8 +475,14 @@ public class Map : MonoBehaviour
     {
         for (int i = 0; i < currentPixels.Length; i++)
             currentPixels[i] = backgroundColor;
-
         textureNeedsApply = true;
+    }
+
+    public void SetGridVisible(bool visible)
+    {
+        showGrid = visible;
+        if (gridOverlay != null)
+            gridOverlay.gameObject.SetActive(visible);
     }
 
     public void SaveMap()
@@ -516,7 +495,6 @@ public class Map : MonoBehaviour
     public void LoadMap()
     {
         string path = System.IO.Path.Combine(Application.persistentDataPath, "playermap.png");
-
         if (System.IO.File.Exists(path))
         {
             byte[] data = System.IO.File.ReadAllBytes(path);
@@ -529,6 +507,8 @@ public class Map : MonoBehaviour
     {
         if (mapTexture != null)
             Destroy(mapTexture);
+        if (gridTexture != null)
+            Destroy(gridTexture);
     }
 
     private void OnApplicationQuit()

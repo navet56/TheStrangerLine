@@ -22,7 +22,6 @@ public class MapSetup : MonoBehaviour
 
         canvasObj.AddComponent<GraphicRaycaster>();
 
-        // Fond semi-transparent (cache en mode minimap)
         GameObject background = new GameObject("Background");
         background.transform.SetParent(canvasObj.transform, false);
         Image bgImage = background.AddComponent<Image>();
@@ -32,7 +31,6 @@ public class MapSetup : MonoBehaviour
         bgRect.anchorMax = Vector2.one;
         bgRect.sizeDelta = Vector2.zero;
 
-        // Zone de limite pour le mode plein ecran
         GameObject sizeLimit = new GameObject("SizeLimit");
         sizeLimit.transform.SetParent(canvasObj.transform, false);
         RectTransform limitRect = sizeLimit.AddComponent<RectTransform>();
@@ -41,7 +39,6 @@ public class MapSetup : MonoBehaviour
         limitRect.offsetMin = Vector2.zero;
         limitRect.offsetMax = Vector2.zero;
 
-        // Conteneur carre
         GameObject mapContainer = new GameObject("MapContainer");
         mapContainer.transform.SetParent(sizeLimit.transform, false);
         RectTransform containerRect = mapContainer.AddComponent<RectTransform>();
@@ -55,7 +52,6 @@ public class MapSetup : MonoBehaviour
         fitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
         fitter.aspectRatio = 1f;
 
-        // Bordure
         GameObject border = new GameObject("Border");
         border.transform.SetParent(mapContainer.transform, false);
         Image borderImage = border.AddComponent<Image>();
@@ -66,7 +62,6 @@ public class MapSetup : MonoBehaviour
         borderRect.offsetMin = new Vector2(-10, -10);
         borderRect.offsetMax = new Vector2(10, 10);
 
-        // Image de la carte
         GameObject mapImageObj = new GameObject("MapImage");
         mapImageObj.transform.SetParent(mapContainer.transform, false);
         RawImage mapImage = mapImageObj.AddComponent<RawImage>();
@@ -76,7 +71,16 @@ public class MapSetup : MonoBehaviour
         mapRect.offsetMin = Vector2.zero;
         mapRect.offsetMax = Vector2.zero;
 
-        // Marqueur joueur
+        GameObject gridObj = new GameObject("GridOverlay");
+        gridObj.transform.SetParent(mapImageObj.transform, false);
+        RawImage gridImage = gridObj.AddComponent<RawImage>();
+        gridImage.raycastTarget = false;
+        RectTransform gridRect = gridObj.GetComponent<RectTransform>();
+        gridRect.anchorMin = Vector2.zero;
+        gridRect.anchorMax = Vector2.one;
+        gridRect.offsetMin = Vector2.zero;
+        gridRect.offsetMax = Vector2.zero;
+
         GameObject markerObj = new GameObject("PlayerMarker");
         markerObj.transform.SetParent(mapImageObj.transform, false);
         Image markerImage = markerObj.AddComponent<Image>();
@@ -85,11 +89,10 @@ public class MapSetup : MonoBehaviour
         markerRect.sizeDelta = new Vector2(15, 15);
         CreateTriangleSprite(markerImage);
 
-        // Texte d'aide en bas (cache en mode minimap)
         GameObject helpText = new GameObject("HelpText");
         helpText.transform.SetParent(canvasObj.transform, false);
         TextMeshProUGUI tmp = helpText.AddComponent<TextMeshProUGUI>();
-        tmp.text = "LMB: Draw | RMB: Erase | 1-5: Colors | Scroll: Brush size | R: Minimap | E: Close";
+        tmp.text = "LMB: Draw | RMB: Erase | 1-5: Colors | Scroll: Brush size | E: Toggle";
         tmp.fontSize = 18;
         tmp.alignment = TextAlignmentOptions.Center;
         tmp.color = Color.white;
@@ -100,7 +103,6 @@ public class MapSetup : MonoBehaviour
         helpRect.anchoredPosition = new Vector2(0, 10);
         helpRect.sizeDelta = new Vector2(0, 30);
 
-        // Palette en haut (cache en mode minimap)
         GameObject palette = CreateColorPalette(canvasObj.transform);
 
         if (playerMap != null)
@@ -113,10 +115,10 @@ public class MapSetup : MonoBehaviour
             playerMap.background = background;
             playerMap.helpText = helpText;
             playerMap.colorPalette = palette;
+            playerMap.gridOverlay = gridImage;
         }
 
         canvasObj.SetActive(false);
-        Debug.Log("Map UI created.");
     }
 
     private GameObject CreateColorPalette(Transform canvasTransform)
